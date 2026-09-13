@@ -1,0 +1,15 @@
+﻿<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        <ErrorBoundary>
+            <ChildContent>
+                <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+            </ChildContent>
+            <ErrorContent Context="exception">
+                <LayoutView Layout="typeof(Layout.MainLayout)">
+                    <MudAlert Severity="Severity.Error">The page encountered an unexpected error. Reload the page to continue.</MudAlert>
+                </LayoutView>
+            </ErrorContent>
+        </ErrorBoundary>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

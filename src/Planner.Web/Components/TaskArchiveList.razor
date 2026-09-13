@@ -1,0 +1,24 @@
+@if (Items.Count == 0)
+{
+    <div class="empty-state">No tasks here.</div>
+}
+else
+{
+    <MudStack Spacing="2">
+        @foreach (var task in Items)
+        {
+            <MudPaper Elevation="0" Class="task-row pa-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center">
+                    <MudIcon Icon="@Icons.Material.Outlined.CheckCircle" Color="Color.Success" />
+                    <MudText Style="flex:1">@task.Title</MudText>
+                    <MudButton Variant="Variant.Text" OnClick="@(() => Restore.InvokeAsync(task.Id))">Restore</MudButton>
+                </MudStack>
+            </MudPaper>
+        }
+    </MudStack>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<TaskSummary> Items { get; set; } = [];
+    [Parameter, EditorRequired] public EventCallback<Guid> Restore { get; set; }
+}

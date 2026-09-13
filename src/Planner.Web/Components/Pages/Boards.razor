@@ -1,0 +1,248 @@
+@page "/boards"
+@implements IAsyncDisposable
+@inject IBoardService BoardsService
+@inject ITaskService TasksService
+@inject IMetadataService Metadata
+@inject IProjectService Projects
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>Boards · Planner</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <MudText Typo="Typo.h3">Boards</MudText>
+    </div>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => _creating = !_creating)">New board</MudButton>
+</div>
+@if (_creating)
+{
+    <MudPaper Elevation="0" Class="pa-4 mb-4" Style="border:1px solid #e7e0ec">
+        <MudStack Row="true" AlignItems="AlignItems.End">
+            <MudTextField @bind-Value="_newName" Label="Board name" Variant="Variant.Outlined" Style="flex:1" />
+            <MudSelect T="BoardMode" @bind-Value="_newMode" Label="Mode" Variant="Variant.Outlined" Style="min-width:160px">
+                @foreach (var mode in Enum.GetValues<BoardMode>()) { <MudSelectItem Value="mode">@mode</MudSelectItem> }
+            </MudSelect>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateBoard">Create</MudButton>
+        </MudStack>
+    </MudPaper>
+}
+<MudStack Row="true" Spacing="1" Class="mb-4">
+    @foreach (var board in _boards)
+    {
+        <MudButton Variant="@(board.Id == _selectedId ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" OnClick="@(() => SelectBoard(board.Id))">@board.Name · @board.TaskCount</MudButton>
+    }
+</MudStack>
+@if (_board is null)
+{
+    <div class="empty-state">Create a board to shape your workflow.</div>
+}
+else
+{
+    <MudPaper Elevation="0" Class="pa-3 mb-4" Style="border:1px solid #e7e0ec">
+        <div class="board-actions">
+            <MudSelect T="Guid?" @bind-Value="_taskToAdd" Label="Add an existing task" Variant="Variant.Outlined" Clearable="true" Margin="Margin.Dense" Style="min-width:260px">
+                @foreach (var task in _availableTasks) { <MudSelectItem T="Guid?" Value="@((Guid?)task.Id)">@task.Title</MudSelectItem> }
+            </MudSelect>
+            <MudButton Variant="Variant.Filled" Size="Size.Medium" Disabled="@(_taskToAdd is null)" OnClick="AddTask">Add to board</MudButton>
+            <MudTextField @bind-Value="_quickTitle" Label="Quick-create task" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:260px" />
+            <MudButton Size="Size.Medium" Disabled="@string.IsNullOrWhiteSpace(_quickTitle)" OnClick="QuickCreate">Create here</MudButton>
+            <MudSpacer />
+            <MudCheckBox T="bool" Value="_includeCompleted" Label="Show completed" ValueChanged="CompletedVisibilityChanged" />
+            <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined">@_board.Mode</MudChip>
+            @if (_board.Mode == BoardMode.Manual)
+            {
+                <MudButton Color="Color.Error" Size="Size.Medium" OnClick="ArchiveBoard">Archive board</MudButton>
+            }
+        </div>
+    </MudPaper>
+    <div class="board-controls mb-3"><MudTextField @bind-Value="_newColumn" Label="New column" Variant="Variant.Outlined" Margin="Margin.Dense" /><MudButton OnClick="AddColumn">Add column</MudButton>
+        <MudSelect T="Guid?" @bind-Value="_removeDestinationId" Label="Destination when removing populated column" Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense">@foreach (var option in _board.Columns) { <MudSelectItem T="Guid?" Value="@option.Id">@option.Name</MudSelectItem> }</MudSelect>
+        @if (_board.Mode != BoardMode.Manual)
+        {
+            <MudSelect T="BoardRuleField" @bind-Value="_ruleField" Label="Rule field" Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var field in Enum.GetValues<BoardRuleField>()) { <MudSelectItem Value="field">@field</MudSelectItem> }
+            </MudSelect>
+            <MudSelect T="BoardRuleOperator" @bind-Value="_ruleOperator" Label="Operator" Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var ruleOperator in Enum.GetValues<BoardRuleOperator>()) { <MudSelectItem Value="ruleOperator">@ruleOperator</MudSelectItem> }
+            </MudSelect>
+            @if (_ruleField == BoardRuleField.Priority)
+            { <MudSelect T="TaskPriority" @bind-Value="_rulePriority" Label="Priority" Variant="Variant.Outlined" Margin="Margin.Dense">@foreach (var value in Enum.GetValues<TaskPriority>()) { <MudSelectItem Value="value">@value</MudSelectItem> }</MudSelect> }
+            else if (_ruleField == BoardRuleField.State)
+            { <MudSelect T="TaskState" @bind-Value="_ruleState" Label="State" Variant="Variant.Outlined" Margin="Margin.Dense">@foreach (var value in Enum.GetValues<TaskState>()) { <MudSelectItem Value="value">@value</MudSelectItem> }</MudSelect> }
+            else
+            { <MudSelect T="Guid?" @bind-Value="_ruleEntityId" Label="@_ruleField.ToString()" Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var option in RuleEntityOptions()) { <MudSelectItem T="Guid?" Value="@option.Id">@option.Name</MudSelectItem> }
+              </MudSelect> }
+            <MudButton Variant="Variant.Outlined" Size="Size.Medium" OnClick="AddRule">Add AND rule</MudButton>
+            <MudButton Color="Color.Error" Size="Size.Medium" OnClick="ArchiveBoard">Archive board</MudButton>
+        }
+        @foreach (var rule in _board.Rules) { <MudChip T="string" OnClose="@(() => RemoveRule(rule.Id))">@rule.Field @rule.Operator @RuleDisplay(rule)</MudChip> }
+        @foreach (var card in _board.SuppressedCards) { <MudButton OnClick="@(() => Restore(card.TaskId))">Restore @card.Title</MudButton> }
+    </div>
+    <div class="kanban" @ref="_kanban">
+        @for (var columnIndex = 0; columnIndex < _board.Columns.Count; columnIndex++)
+        {
+            var column = _board.Columns[columnIndex];
+            var currentColumnIndex = columnIndex;
+            <section class="kanban-column" data-column-id="@column.Id">
+                <MudStack Row="true" AlignItems="AlignItems.Center">
+                    <div style="width:9px;height:9px;border-radius:50%;background:@column.Color"></div>
+                    <MudText Typo="Typo.subtitle1" Style="font-weight:700;flex:1">@column.Name</MudText>
+                    <MudChip T="int" Size="Size.Small">@column.Cards.Count</MudChip>
+                    <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small" OnClick="@(() => RenameColumn(column))" />
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowLeft" Size="Size.Small" OnClick="@(() => ReorderColumn(column.Id, -1))" />
+                    <MudIconButton Icon="@Icons.Material.Outlined.KeyboardArrowRight" Size="Size.Small" OnClick="@(() => ReorderColumn(column.Id, 1))" />
+                    <MudIconButton Icon="@Icons.Material.Outlined.Home" Color="@(column.IsDefault ? Color.Primary : Color.Default)" Size="Size.Small" OnClick="@(() => SetDefault(column.Id))" />
+                    <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" OnClick="@(() => RemoveColumn(column))" />
+                </MudStack>
+                @foreach (var card in column.Cards)
+                {
+                    <article class="kanban-card" data-task-id="@card.TaskId">
+                        <MudText Typo="Typo.subtitle2">@card.Title</MudText>
+                        @if (card.Project is not null) { <MudText Typo="Typo.caption" Color="Color.Secondary">@card.Project</MudText> }
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mt-2">
+                            @if (card.State != TaskState.Active) { <MudChip T="string" Size="Size.Small" Color="Color.Success">@card.State</MudChip> }
+                            <MudSpacer />
+                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small" OnClick="@(() => _editingId = card.TaskId)" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.ChevronLeft" Size="Size.Small" Disabled="@(currentColumnIndex == 0)" OnClick="@(() => Move(card.TaskId, currentColumnIndex - 1))" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.ChevronRight" Size="Size.Small" Disabled="@(currentColumnIndex == _board.Columns.Count - 1)" OnClick="@(() => Move(card.TaskId, currentColumnIndex + 1))" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.Close" Size="Size.Small" OnClick="@(() => Remove(card.TaskId))" />
+                        </MudStack>
+                    </article>
+                }
+            </section>
+        }
+    </div>
+}
+@if (_editingId is { } editingId) { <TaskEditor TaskId="editingId" OnClosed="EditorClosed" /> }
+
+@code {
+    private IReadOnlyList<BoardSummary> _boards = [];
+    private IReadOnlyList<TaskSummary> _availableTasks = [];
+    private BoardDetails? _board;
+    private Guid? _selectedId;
+    private Guid? _taskToAdd;
+    private bool _creating;
+    private string _newName = string.Empty;
+    private BoardMode _newMode;
+    private BoardRuleField _ruleField = BoardRuleField.Project;
+    private BoardRuleOperator _ruleOperator = BoardRuleOperator.Equals;
+    private bool _includeCompleted;
+    private string _ruleValue = string.Empty, _quickTitle = string.Empty, _newColumn = string.Empty;
+    private Guid? _editingId, _ruleEntityId, _removeDestinationId;
+    private TaskPriority _rulePriority;
+    private TaskState _ruleState = TaskState.Active;
+    private IReadOnlyList<ProjectSummary> _projects = [];
+    private IReadOnlyList<TypeSummary> _types = [];
+    private IReadOnlyList<TagSummary> _tags = [];
+    private ElementReference _kanban;
+    private IJSObjectReference? _sortable;
+    private DotNetObjectReference<Boards>? _dotNet;
+    private bool _initializeSortable;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadLists();
+        if (_boards.Count > 0) await SelectBoard(_boards[0].Id);
+    }
+
+    private async Task LoadLists()
+    {
+        _boards = await BoardsService.ListAsync();
+        _availableTasks = await TasksService.ListAsync();
+        _projects = await Projects.ListAsync(); _types = await Metadata.ListTypesAsync(); _tags = await Metadata.ListTagsAsync();
+    }
+
+    private async Task SelectBoard(Guid id)
+    {
+        _selectedId = id;
+        _board = await BoardsService.GetAsync(id, _includeCompleted);
+        _initializeSortable = true;
+    }
+
+    private async Task CreateBoard()
+    {
+        if (string.IsNullOrWhiteSpace(_newName)) return;
+        var id = await BoardsService.CreateAsync(_newName, _newMode);
+        _newName = string.Empty;
+        _creating = false;
+        await LoadLists();
+        await SelectBoard(id);
+    }
+
+    private async Task AddTask()
+    {
+        if (_selectedId is null || _taskToAdd is null) return;
+        await BoardsService.AddPlacementAsync(_selectedId.Value, _taskToAdd.Value);
+        _taskToAdd = null;
+        await RefreshBoard();
+    }
+
+    private async Task Move(Guid taskId, int columnIndex)
+    {
+        if (_selectedId is null || _board is null || columnIndex < 0 || columnIndex >= _board.Columns.Count) return;
+        await BoardsService.MovePlacementAsync(_selectedId.Value, taskId, _board.Columns[columnIndex].Id);
+        await RefreshBoard();
+    }
+
+    private async Task Remove(Guid taskId)
+    {
+        if (_selectedId is null) return;
+        await BoardsService.RemovePlacementAsync(_selectedId.Value, taskId);
+        await RefreshBoard();
+    }
+
+    private async Task AddRule()
+    {
+        if (_selectedId is null) return;
+        var value = _ruleField == BoardRuleField.Priority ? _rulePriority.ToString() : _ruleField == BoardRuleField.State ? _ruleState.ToString() : _ruleEntityId?.ToString();
+        if (string.IsNullOrWhiteSpace(value)) return;
+        await BoardsService.AddRuleAsync(_selectedId.Value, _ruleField, _ruleOperator, value);
+        _ruleEntityId = null; await RefreshBoard();
+    }
+
+    private async Task CompletedVisibilityChanged(bool value)
+    {
+        _includeCompleted = value;
+        await RefreshBoard();
+    }
+
+    private async Task QuickCreate() { if (_board is null) return; await BoardsService.QuickCreateAsync(_board.Id, _board.Columns.Single(x => x.IsDefault).Id, _quickTitle); _quickTitle = ""; await RefreshBoard(); }
+    private async Task AddColumn() { if (_board is null || string.IsNullOrWhiteSpace(_newColumn)) return; await BoardsService.AddColumnAsync(_board.Id, _newColumn); _newColumn = ""; await RefreshBoard(); }
+    private async Task RenameColumn(BoardColumnDto column) { if (_board is null) return; var name = await JS.InvokeAsync<string?>("prompt", "Column name", column.Name); if (!string.IsNullOrWhiteSpace(name)) { await BoardsService.RenameColumnAsync(_board.Id, column.Id, name); await RefreshBoard(); } }
+    private async Task ReorderColumn(Guid id, int direction) { if (_board is null) return; await BoardsService.ReorderColumnAsync(_board.Id, id, direction); await RefreshBoard(); }
+    private async Task SetDefault(Guid id) { if (_board is null) return; await BoardsService.SetDefaultColumnAsync(_board.Id, id); await RefreshBoard(); }
+    private async Task RemoveColumn(BoardColumnDto column)
+    {
+        if (_board is null || !await JS.InvokeAsync<bool>("confirm", $"Remove column '{column.Name}'?")) return;
+        if (column.Cards.Count > 0 && (_removeDestinationId is null || _removeDestinationId == column.Id)) { Snackbar.Add("Choose a different destination column first.", Severity.Warning); return; }
+        await BoardsService.RemoveColumnAsync(_board.Id, column.Id, column.Cards.Count == 0 ? null : _removeDestinationId); _removeDestinationId = null; await RefreshBoard();
+    }
+    private async Task ArchiveBoard() { if (_board is null || !await JS.InvokeAsync<bool>("confirm", $"Archive board '{_board.Name}'?")) return; await BoardsService.SetArchivedAsync(_board.Id, true); _board = null; _selectedId = null; await LoadLists(); }
+    private async Task RemoveRule(Guid id) { if (_board is null) return; await BoardsService.RemoveRuleAsync(_board.Id, id); await RefreshBoard(); }
+    private async Task Restore(Guid taskId) { if (_board is null) return; await BoardsService.RestoreRulePlacementAsync(_board.Id, taskId); await RefreshBoard(); }
+    private async Task EditorClosed() { _editingId = null; await RefreshBoard(); }
+    private IEnumerable<(Guid Id, string Name)> RuleEntityOptions() => _ruleField switch { BoardRuleField.Project => _projects.Select(x => (x.Id, x.Name)), BoardRuleField.Type => _types.Select(x => (x.Id, x.Name)), _ => _tags.Select(x => (x.Id, x.Name)) };
+    private string RuleDisplay(BoardRuleDto rule) { if (!Guid.TryParse(rule.Value, out var id)) return rule.Value; return _projects.FirstOrDefault(x => x.Id == id)?.Name ?? _types.FirstOrDefault(x => x.Id == id)?.Name ?? _tags.FirstOrDefault(x => x.Id == id)?.Name ?? rule.Value; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_initializeSortable || _board is null) return;
+        _initializeSortable = false;
+        try { if (_sortable is not null) await _sortable.InvokeVoidAsync("dispose"); _dotNet ??= DotNetObjectReference.Create(this); _sortable = await JS.InvokeAsync<IJSObjectReference>("plannerSortable.createBoard", _kanban, _dotNet, _board.Id); }
+        catch (Exception exception) { Snackbar.Add($"Drag and drop unavailable: {exception.Message}. Use arrow buttons.", Severity.Warning); }
+    }
+    [JSInvokable] public async Task<bool> OnCardMoved(string taskId, string columnId, int targetIndex)
+    {
+        try { if (_board is null) return false; await BoardsService.MovePlacementAsync(_board.Id, Guid.Parse(taskId), Guid.Parse(columnId), targetIndex); await RefreshBoard(); await InvokeAsync(StateHasChanged); return true; }
+        catch (Exception exception) { Snackbar.Add(exception.Message, Severity.Error); await RefreshBoard(); await InvokeAsync(StateHasChanged); return false; }
+    }
+    [JSInvokable] public async Task OnBoardDragFailed(string message) { Snackbar.Add(message, Severity.Warning); await RefreshBoard(); await InvokeAsync(StateHasChanged); }
+    private async Task RefreshBoard()
+    {
+        if (_selectedId is not null) _board = await BoardsService.GetAsync(_selectedId.Value, _includeCompleted);
+        _boards = await BoardsService.ListAsync(); _initializeSortable = true;
+    }
+    public async ValueTask DisposeAsync() { if (_sortable is not null) { try { await _sortable.InvokeVoidAsync("dispose"); } catch (JSDisconnectedException) { } await _sortable.DisposeAsync(); } _dotNet?.Dispose(); }
+}

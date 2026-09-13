@@ -1,0 +1,147 @@
+@inject ITaskService Tasks
+@inject IProjectService Projects
+@inject IMetadataService Metadata
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+@if (_details is not null)
+{
+    <div class="task-editor-backdrop" role="presentation">
+        <MudPaper Class="task-editor pa-5" Elevation="12" role="dialog" aria-modal="true" aria-label="Edit task">
+            <MudStack Spacing="2">
+                <MudText Typo="Typo.h5">Edit task</MudText>
+                <MudTextField @bind-Value="_title" Label="Title" Variant="Variant.Outlined" Error="@(!string.IsNullOrEmpty(_titleError))" ErrorText="@_titleError" Disabled="_busy" />
+                <MudTextField @bind-Value="_description" Label="Description" Lines="3" Variant="Variant.Outlined" />
+                <MudStack Row="true">
+                    <MudSelect T="Guid?" @bind-Value="_projectId" Label="Project" Clearable="true" Variant="Variant.Outlined">
+                        @foreach (var project in _projects) { <MudSelectItem T="Guid?" Value="@project.Id">@project.Name</MudSelectItem> }
+                    </MudSelect>
+                    <MudSelect T="Guid" @bind-Value="_typeId" Label="Type" Variant="Variant.Outlined">
+                        @foreach (var type in _types) { <MudSelectItem Value="type.Id">@type.Name</MudSelectItem> }
+                    </MudSelect>
+                    <MudSelect T="TaskPriority" @bind-Value="_priority" Label="Priority" Variant="Variant.Outlined">
+                        @foreach (var priority in Enum.GetValues<TaskPriority>()) { <MudSelectItem Value="priority">@priority</MudSelectItem> }
+                    </MudSelect>
+                </MudStack>
+                <MudStack Row="true">
+                    <MudTextField @bind-Value="_dueDate" Label="Due date" Placeholder="YYYY-MM-DD" Variant="Variant.Outlined" Error="@(!string.IsNullOrEmpty(_dueDateError))" ErrorText="@_dueDateError" Disabled="_busy" />
+                    <MudTextField @bind-Value="_dueTime" Label="Due time (optional)" Placeholder="HH:mm" Variant="Variant.Outlined" Error="@(!string.IsNullOrEmpty(_dueTimeError))" ErrorText="@_dueTimeError" Disabled="_busy" />
+                </MudStack>
+                <MudText Typo="Typo.subtitle2">Tags</MudText>
+                <MudStack Row="true">
+                    @foreach (var tag in _tags)
+                    {
+                        <MudCheckBox T="bool" Value="@_tagIds.Contains(tag.Id)" ValueChanged="@(value => ToggleTag(tag.Id, value))" Label="@tag.Name" />
+                    }
+                </MudStack>
+                <MudText Typo="Typo.subtitle2">Checklist</MudText>
+                @foreach (var checklist in _details.Checklists)
+                {
+                    <MudText Typo="Typo.caption">@checklist.Title</MudText>
+                    @foreach (var item in checklist.Items)
+                    {
+                        <MudCheckBox T="bool" Value="item.IsCompleted" ValueChanged="@(value => ToggleChecklist(item.Id, value))" Label="@item.Title" />
+                    }
+                }
+                <MudStack Row="true">
+                    <MudTextField @bind-Value="_newChecklistItem" Label="New checklist item" Variant="Variant.Outlined" Style="flex:1" />
+                    <MudButton OnClick="AddChecklistItem" Disabled="@string.IsNullOrWhiteSpace(_newChecklistItem)">Add</MudButton>
+                </MudStack>
+                <MudStack Row="true" Justify="Justify.SpaceBetween">
+                    <div>
+                        <MudButton Color="Color.Success" OnClick="@(() => ChangeState(TaskState.Completed))">Complete</MudButton>
+                        <MudButton Color="Color.Warning" OnClick="@(() => ChangeState(TaskState.Cancelled))">Cancel task</MudButton>
+                        <MudButton Color="Color.Error" OnClick="Archive">Archive</MudButton>
+                    </div>
+                    <div>
+                        <MudButton OnClick="Close" Disabled="_busy">Close</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Save" Disabled="_busy">Save</MudButton>
+                    </div>
+                </MudStack>
+            </MudStack>
+        </MudPaper>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid TaskId { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+    private TaskEditDetails? _details;
+    private IReadOnlyList<ProjectSummary> _projects = [];
+    private IReadOnlyList<TypeSummary> _types = [];
+    private IReadOnlyList<TagSummary> _tags = [];
+    private string _title = "", _description = "", _dueDate = "", _dueTime = "", _newChecklistItem = "";
+    private string _titleError = "", _dueDateError = "", _dueTimeError = "";
+    private Guid? _projectId; private Guid _typeId; private TaskPriority _priority; private HashSet<Guid> _tagIds = [];
+    private Guid? _loadedTaskId;
+    private bool _busy;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedTaskId == TaskId) return;
+        _loadedTaskId = TaskId;
+        _details = await Tasks.GetEditDetailsAsync(TaskId);
+        _projects = await Projects.ListAsync(); _types = await Metadata.ListTypesAsync(); _tags = await Metadata.ListTagsAsync();
+        if (_details is null) return;
+        var task = _details.Task; _title = task.Title; _description = task.Description; _projectId = task.ProjectId; _typeId = task.TypeId; _priority = task.Priority;
+        _dueDate = task.DueDate?.ToString("yyyy-MM-dd") ?? ""; _dueTime = task.DueTime?.ToString("HH:mm") ?? ""; _tagIds = _details.TagIds.ToHashSet();
+    }
+
+    private void ToggleTag(Guid id, bool value) { if (value) _tagIds.Add(id); else _tagIds.Remove(id); }
+    private async Task ToggleChecklist(Guid id, bool value) { await Tasks.SetChecklistItemCompletedAsync(id, value); await Reload(); }
+    private async Task AddChecklistItem()
+    {
+        if (_details is null || string.IsNullOrWhiteSpace(_newChecklistItem)) return;
+        var checklistId = _details.Checklists.FirstOrDefault()?.Id ?? await Tasks.AddChecklistAsync(TaskId, "Checklist");
+        await Tasks.AddChecklistItemAsync(checklistId, _newChecklistItem); _newChecklistItem = ""; await Reload();
+    }
+    private async Task Save()
+    {
+        _titleError = string.IsNullOrWhiteSpace(_title) ? "Title is required." : "";
+        _dueDateError = "";
+        _dueTimeError = "";
+        DateOnly? date = null;
+        TimeOnly? time = null;
+        DateOnly parsedDate = default;
+        TimeOnly parsedTime = default;
+        if (!string.IsNullOrWhiteSpace(_dueDate) && !DateOnly.TryParseExact(_dueDate, "yyyy-MM-dd", out parsedDate))
+            _dueDateError = "Use YYYY-MM-DD.";
+        else if (!string.IsNullOrWhiteSpace(_dueDate))
+            date = parsedDate;
+        if (!string.IsNullOrWhiteSpace(_dueTime) && !TimeOnly.TryParseExact(_dueTime, "HH:mm", out parsedTime))
+            _dueTimeError = "Use HH:mm.";
+        else if (!string.IsNullOrWhiteSpace(_dueTime))
+            time = parsedTime;
+        if (time is not null && date is null && string.IsNullOrEmpty(_dueDateError))
+            _dueDateError = "A due date is required when a due time is set.";
+        if (!string.IsNullOrEmpty(_titleError) || !string.IsNullOrEmpty(_dueDateError) || !string.IsNullOrEmpty(_dueTimeError) || _details is null) return;
+        _busy = true;
+        try
+        {
+            await Tasks.UpdateAsync(TaskId, _title, _description, _projectId, _typeId, _priority, date, time, _tagIds, _details.Task.Version);
+            await Close();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            Snackbar.Add("This task changed after you opened it. Your changes were not saved; review the latest version and try again.", Severity.Warning);
+            _loadedTaskId = null;
+            await OnParametersSetAsync();
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+    private async Task ChangeState(TaskState state)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"{state} this task?")) return;
+        await Tasks.SetStateAsync(TaskId, state); await Close();
+    }
+    private async Task Archive() { if (await JS.InvokeAsync<bool>("confirm", "Archive this task?")) { await Tasks.SetArchivedAsync(TaskId, true); await Close(); } }
+    private async Task Reload() => _details = await Tasks.GetEditDetailsAsync(TaskId);
+    private Task Close() { _details = null; return OnClosed.InvokeAsync(); }
+}

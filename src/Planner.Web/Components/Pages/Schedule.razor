@@ -1,0 +1,304 @@
+@page "/schedule"
+@implements IAsyncDisposable
+@inject IScheduleService ScheduleService
+@inject ITaskService TasksService
+@inject IOutlookCalendarService OutlookCalendar
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>Schedule · Planner</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <MudText Typo="Typo.h3">Schedule</MudText>
+    </div>
+</div>
+
+@if (_availability.AccountCount > 0)
+{
+    <MudAlert Severity="@(_availability.IsStale ? Severity.Warning : Severity.Info)" Class="mb-4">
+        @_availability.Message @if (_availability.LastSuccessfulSyncAtUtc is not null) { <span>Last sync: @_availability.LastSuccessfulSyncAtUtc.Value.ToLocalTime().ToString("g").</span> }
+    </MudAlert>
+}
+
+<div class="calendar-layout">
+    <MudPaper Elevation="0" Class="pa-4 calendar-surface">
+        <div @ref="_calendarElement"></div>
+    </MudPaper>
+    <MudPaper Elevation="0" Class="pa-4 schedule-editor">
+        <MudText Typo="Typo.h6">@(_editingId is null ? "New time block" : "Edit time block")</MudText>
+        @if (_editingId is not null)
+        {
+            var editingStatus = _blocks.FirstOrDefault(x => x.Id == _editingId.Value)?.Status ?? TimeBlockStatus.Planned;
+            <MudStack Row="true" Class="mt-2" Spacing="0">
+                <MudIconButton Icon="@Icons.Material.Outlined.Edit" OnClick="@(async _ => await Save(false))" aria-label="Save" />
+                @if (editingStatus == TimeBlockStatus.Planned)
+                {
+                    <MudIconButton Icon="@Icons.Material.Outlined.Done" Color="Color.Success" OnClick="@(() => SetStatus(_editingId.Value, TimeBlockStatus.Completed))" aria-label="Complete" />
+                    <MudIconButton Icon="@Icons.Material.Outlined.Cancel" Color="Color.Warning" OnClick="@(() => SetStatus(_editingId.Value, TimeBlockStatus.Cancelled))" aria-label="Cancel" />
+                }
+                else
+                {
+                    <MudIconButton Icon="@Icons.Material.Outlined.Undo" Color="Color.Info" OnClick="@(() => SetStatus(_editingId.Value, TimeBlockStatus.Planned))" aria-label="Restore" />
+                }
+                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Color="Color.Error" OnClick="@(() => Delete(_editingId.Value))" aria-label="Delete" />
+            </MudStack>
+        }
+        <MudSelect T="Guid?" @bind-Value="_taskId" Label="Task" Variant="Variant.Outlined" Class="mt-3" Clearable="true">
+            <MudSelectItem T="Guid?" Value="(Guid?)null">(none)</MudSelectItem>
+            @foreach (var task in _tasks)
+            {
+                <MudSelectItem T="Guid?" Value="@((Guid?)task.Id)">@task.Title</MudSelectItem>
+            }
+        </MudSelect>
+        <label class="schedule-field">Starts<input type="datetime-local" @bind="_startsLocal" /></label>
+        <label class="schedule-field">Ends<input type="datetime-local" @bind="_endsLocal" /></label>
+        <MudTextField @bind-Value="_notes" Label="Notes" Variant="Variant.Outlined" Lines="3" Class="mt-3" Immediate="true" />
+        @if (_pendingConflicts.Count > 0)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mt-3">
+                @(_pendingConflicts.Any(x => x.Severity == ScheduleConflictSeverity.Blocking) ? "This has scheduling conflicts" : "Availability warning"): @string.Join(", ", _pendingConflicts.Select(x => x.TaskTitle)).
+            </MudAlert>
+        }
+        <MudStack Row="true" Class="mt-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(_taskId is null && string.IsNullOrWhiteSpace(_notes))" OnClick="OnCreateClick">
+                @(_editingId is null ? "Create block" : "Save changes")
+            </MudButton>
+            @if (_pendingConflicts.Count > 0)
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="OnSaveAnywayClick">Save anyway</MudButton>
+            }
+            @if (_editingId is not null)
+            {
+                <MudButton Variant="Variant.Text" OnClick="ResetEditor">Cancel</MudButton>
+            }
+        </MudStack>
+    </MudPaper>
+</div>
+
+
+@code {
+    private ElementReference _calendarElement;
+    private IJSObjectReference? _calendar;
+    private DotNetObjectReference<Schedule>? _dotNet;
+    private IReadOnlyList<TaskSummary> _tasks = [];
+    private IReadOnlyList<TimeBlockDto> _blocks = [];
+    private IReadOnlyList<ImportedCalendarEventDto> _externalEvents = [];
+    private OutlookAvailabilitySummary _availability = new(false, 0, null, false, false, string.Empty);
+    private IReadOnlyList<ScheduleConflict> _pendingConflicts = [];
+    private DateTimeOffset _rangeStart;
+    private DateTimeOffset _rangeEnd;
+    private Guid? _taskId;
+    private Guid? _editingId;
+    private DateTime _startsLocal;
+    private DateTime _endsLocal;
+    private string _notes = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tasks = (await TasksService.ListAsync()).OrderBy(x => x.Title).ToList();
+        var today = DateTimeOffset.Now.Date;
+        _rangeStart = new DateTimeOffset(today.AddDays(-(((int)today.DayOfWeek + 6) % 7)), TimeZoneInfo.Local.GetUtcOffset(today)).ToUniversalTime();
+        _rangeEnd = _rangeStart.AddDays(7);
+        await LoadBlocks();
+        ResetEditor();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _dotNet = DotNetObjectReference.Create(this);
+        _calendar = await JS.InvokeAsync<IJSObjectReference>("plannerCalendar.create", _calendarElement, _dotNet, new
+        {
+            initialView = "timeGridWeek",
+            selectable = true,
+            editable = true,
+            events = CalendarEvents(),
+            externalEvents = ExternalCalendarEvents()
+        });
+    }
+
+    [JSInvokable]
+    public async Task OnCalendarRange(string startsAt, string endsAt)
+    {
+        _rangeStart = DateTimeOffset.Parse(startsAt).ToUniversalTime();
+        _rangeEnd = DateTimeOffset.Parse(endsAt).ToUniversalTime();
+        await LoadBlocks();
+        await UpdateCalendar();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task OnCalendarSelect(string startsAt, string endsAt)
+    {
+        _editingId = null;
+        _startsLocal = LocalInput(DateTimeOffset.Parse(startsAt));
+        _endsLocal = LocalInput(DateTimeOffset.Parse(endsAt));
+        _pendingConflicts = [];
+        return InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task OnCalendarEventClick(string? timeBlockId, string? taskId)
+    {
+        if (Guid.TryParse(timeBlockId, out var id))
+        {
+            var block = _blocks.FirstOrDefault(x => x.Id == id);
+            if (block is not null) Edit(block);
+        }
+        return InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task<bool> OnCalendarEventChange(string timeBlockId, string startsAt, string endsAt)
+    {
+        if (!Guid.TryParse(timeBlockId, out var id)) return false;
+        var current = _blocks.FirstOrDefault(x => x.Id == id);
+        if (current is null) return false;
+        try
+        {
+            var result = await ScheduleService.UpdateAsync(id, DateTimeOffset.Parse(startsAt), DateTimeOffset.Parse(endsAt), current.Notes);
+            if (!result.Saved)
+            {
+                Snackbar.Add("That move overlaps another block. Edit the block to explicitly override it.", Severity.Warning);
+                return false;
+            }
+            await LoadBlocks();
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+            return false;
+        }
+    }
+
+    private async Task Save(bool overrideConflicts)
+    {
+        try
+        {
+            if (_taskId is null && string.IsNullOrWhiteSpace(_notes))
+            {
+                Snackbar.Add("An untied time block needs notes so it has a title.", Severity.Warning);
+                return;
+            }
+            var starts = ParseLocal(_startsLocal);
+            var ends = ParseLocal(_endsLocal);
+            var result = _editingId is null
+                ? await ScheduleService.CreateAsync(_taskId, starts, ends, _notes, overrideConflicts)
+                : await ScheduleService.UpdateAsync(_editingId.Value, starts, ends, _notes, overrideConflicts, taskId: _taskId);
+            _pendingConflicts = result.Conflicts;
+            if (!result.Saved)
+            {
+                Snackbar.Add("A conflict or warning was found. Click 'Save anyway' to create the block.", Severity.Warning);
+                return;
+            }
+            Snackbar.Add("Time block saved.", Severity.Success);
+            await LoadBlocks();
+            await UpdateCalendar();
+            ResetEditor();
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+    }
+
+    private async Task OnCreateClick(MouseEventArgs e) => await Save(false);
+    private async Task OnSaveAnywayClick(MouseEventArgs e) => await Save(true);
+
+    private void Edit(TimeBlockDto block)
+    {
+        _editingId = block.Id;
+        _taskId = block.TaskId;
+        _startsLocal = LocalInput(block.StartsAtUtc);
+        _endsLocal = LocalInput(block.EndsAtUtc);
+        _notes = block.Notes;
+        _pendingConflicts = [];
+    }
+
+    private async Task SetStatus(Guid id, TimeBlockStatus status)
+    {
+        await ScheduleService.SetStatusAsync(id, status);
+        await LoadBlocks();
+        await UpdateCalendar();
+    }
+
+    private async Task Delete(Guid id)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", "Remove this time block? The task is not deleted; only this scheduled block will be hidden.")) return;
+        await ScheduleService.SetDeletedAsync(id, true);
+        await LoadBlocks();
+        await UpdateCalendar();
+        if (_editingId == id) ResetEditor();
+    }
+
+    private void ResetEditor()
+    {
+        _editingId = null;
+        _pendingConflicts = [];
+        _notes = string.Empty;
+        _taskId = _tasks.FirstOrDefault()?.Id;
+        var start = DateTimeOffset.Now.AddMinutes(30 - DateTimeOffset.Now.Minute % 30);
+        _startsLocal = LocalInput(start);
+        _endsLocal = LocalInput(start.AddHours(1));
+    }
+
+    private async Task LoadBlocks()
+    {
+        _blocks = await ScheduleService.ListAsync(_rangeStart, _rangeEnd);
+        _externalEvents = await OutlookCalendar.ListEventsAsync(_rangeStart, _rangeEnd);
+        _availability = await OutlookCalendar.GetAvailabilityAsync();
+    }
+
+    private object[] CalendarEvents() => _blocks.Select(block => (object)new
+    {
+        id = block.Id,
+        title = block.Title,
+        start = block.StartsAtUtc,
+        end = block.EndsAtUtc,
+        color = block.Status switch { TimeBlockStatus.Completed => "#2e7d32", TimeBlockStatus.Cancelled => "#79747e", _ => "rgb(3, 167, 225)" },
+        editable = block.Status == TimeBlockStatus.Planned,
+        extendedProps = new { timeBlockId = block.Id, taskId = block.TaskId, locked = block.Status != TimeBlockStatus.Planned }
+    }).ToArray();
+
+    private object[] ExternalCalendarEvents() => _externalEvents.Select(calendarEvent => (object)new
+    {
+        id = $"outlook-{calendarEvent.Id}",
+        title = calendarEvent.Subject,
+        start = calendarEvent.StartsAtUtc,
+        end = calendarEvent.EndsAtUtc,
+        allDay = calendarEvent.IsAllDay,
+        color = calendarEvent.HasPlannerConflict ? "#b3261e" : calendarEvent.ShowAs switch
+        {
+            ExternalEventShowAs.Free => "#79747e",
+            ExternalEventShowAs.Tentative or ExternalEventShowAs.WorkingElsewhere or ExternalEventShowAs.Unknown => "#ed6c02",
+            _ => "#00639b"
+        },
+        extendedProps = new { locked = true, source = "outlook", accountId = calendarEvent.AccountId }
+    }).ToArray();
+
+    private async Task UpdateCalendar()
+    {
+        if (_calendar is not null) await _calendar.InvokeVoidAsync("update", CalendarEvents(), ExternalCalendarEvents());
+    }
+
+    private static DateTime LocalInput(DateTimeOffset value) => DateTime.SpecifyKind(value.LocalDateTime, DateTimeKind.Unspecified);
+    private static DateTimeOffset ParseLocal(DateTime value)
+    {
+        var local = DateTime.SpecifyKind(value, DateTimeKind.Unspecified);
+        return new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local)).ToUniversalTime();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_calendar is not null)
+        {
+            try { await _calendar.InvokeVoidAsync("dispose"); }
+            catch (JSDisconnectedException) { }
+            await _calendar.DisposeAsync();
+        }
+        _dotNet?.Dispose();
+    }
+}

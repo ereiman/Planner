@@ -1,0 +1,44 @@
+@page "/archive"
+@inject ITaskService Tasks
+
+<PageTitle>Archive · Planner</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <MudText Typo="Typo.h3">Archive</MudText>
+    </div>
+</div>
+<MudTabs Elevation="0" Rounded="true">
+    <MudTabPanel Text="Completed">
+        <TaskArchiveList Items="_completed" Restore="RestoreState" />
+    </MudTabPanel>
+    <MudTabPanel Text="Cancelled">
+        <TaskArchiveList Items="_cancelled" Restore="RestoreState" />
+    </MudTabPanel>
+    <MudTabPanel Text="Archived">
+        <TaskArchiveList Items="_archived" Restore="Unarchive" />
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    private IReadOnlyList<TaskSummary> _completed = [];
+    private IReadOnlyList<TaskSummary> _cancelled = [];
+    private IReadOnlyList<TaskSummary> _archived = [];
+    protected override async Task OnInitializedAsync() => await Load();
+    private async Task Load()
+    {
+        _completed = await Tasks.ListAsync(TaskState.Completed);
+        _cancelled = await Tasks.ListAsync(TaskState.Cancelled);
+        _archived = await Tasks.ListArchivedAsync();
+    }
+    private async Task RestoreState(Guid id)
+    {
+        await Tasks.SetStateAsync(id, TaskState.Active);
+        await Load();
+    }
+    private async Task Unarchive(Guid id)
+    {
+        await Tasks.SetArchivedAsync(id, false);
+        await Load();
+    }
+}

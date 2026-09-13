@@ -1,0 +1,243 @@
+@page "/tasks"
+@inject ITaskService TasksService
+@inject IProjectService ProjectsService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>Tasks · Planner</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <MudText Typo="Typo.h3">Tasks</MudText>
+    </div>
+</div>
+
+<MudPaper Elevation="0" Class="pa-4 mb-4" Style="border:1px solid #e7e0ec">
+    <MudText Typo="Typo.h6" Class="mb-3">Quick capture</MudText>
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="quick-capture">
+        <MudTextField @bind-Value="_captureTitle" Label="What needs doing?" Variant="Variant.Outlined" Immediate="true" OnKeyDown="HandleCaptureKey" Margin="Margin.Dense" Style="flex:1" />
+        <MudAutocomplete T="string" @bind-Value="_captureProjectName" Label="Project" Placeholder="Select or type a new project" SearchFunc="SearchProjects" CoerceValue="true" Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:220px" />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="add-task-button" Disabled="@string.IsNullOrWhiteSpace(_captureTitle)" OnClick="CaptureTask">Add task</MudButton>
+    </MudStack>
+</MudPaper>
+
+<MudPaper Elevation="0" Class="pa-4 mb-5" Style="border:1px solid #e7e0ec">
+    <MudText Typo="Typo.h6" Class="mb-4">Projects</MudText>
+    @if (_projects.Count == 0)
+    {
+        <MudText Color="Color.Secondary">No projects yet. Create one here, then assign tasks from their edit dialog.</MudText>
+    }
+    else
+    {
+        <MudGrid>
+            @foreach (var project in _projects)
+            {
+                <MudItem xs="12" sm="6" lg="4">
+                    <MudPaper Elevation="0" Class="pa-3 task-row">
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <div style="width:10px;height:36px;border-radius:8px;background:@project.Color"></div>
+                            <div style="flex:1;min-width:0">
+                                <MudText Typo="Typo.subtitle1">@project.Name</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@project.ActiveTasks active · @project.CompletedTasks completed</MudText>
+                            </div>
+                            <MudIconButton Icon="@Icons.Material.Outlined.FilterAlt" aria-label="Show this project's tasks" OnClick="@(() => ProjectChanged(project.Id))" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.Edit" aria-label="Rename project" OnClick="@(() => RenameProject(project.Id, project.Name))" />
+                            <MudIconButton Icon="@Icons.Material.Outlined.Archive" aria-label="Archive project" OnClick="@(() => ArchiveProject(project.Id, project.Name))" />
+                        </MudStack>
+                    </MudPaper>
+                </MudItem>
+            }
+        </MudGrid>
+    }
+</MudPaper>
+
+<MudPaper Elevation="0" Class="pa-4 mb-4" Style="border:1px solid #e7e0ec">
+    <MudText Typo="Typo.h6" Class="mb-3">Tasks</MudText>
+    <MudGrid Spacing="1" Class="task-filters">
+        <MudItem xs="12" md="3"><MudTextField @bind-Value="_nameFilter" Label="Filter by name" Variant="Variant.Outlined" Immediate="true" Margin="Margin.Dense" /></MudItem>
+        <MudItem xs="12" md="2"><MudTextField @bind-Value="_idFilter" Label="Filter by ID" Variant="Variant.Outlined" Immediate="true" Margin="Margin.Dense" /></MudItem>
+        <MudItem xs="12" md="2"><MudDatePicker @bind-Date="_dueDateFilter" Label="Filter by due date" Variant="Variant.Outlined" Clearable="true" Margin="Margin.Dense" /></MudItem>
+        <MudItem xs="12" md="2" Class="extra-filter-column">
+            <MudSelect T="string" @bind-Value="_extraFilter" Label="Extra filter" Variant="Variant.Outlined" Clearable="true" Margin="Margin.Dense">
+                <MudSelectItem T="string" Value="@("high")">High priority</MudSelectItem>
+                <MudSelectItem T="string" Value="@("soon")">Due soon</MudSelectItem>
+                <MudSelectItem T="string" Value="@("high-soon")">High priority + due soon</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="2">
+            <MudSelect T="Guid?" @bind-Value="_selectedProjectId" Label="Filter by project" Variant="Variant.Outlined" Clearable="true" Margin="Margin.Dense">
+                @foreach (var project in _projects)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)project.Id)">@project.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="1">
+            <MudStack Row="true" Class="filter-actions">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" OnClick="ApplyFilters">Filter</MudButton>
+                <MudButton Variant="Variant.Text" Size="Size.Large" OnClick="ClearFilters">Clear</MudButton>
+            </MudStack>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+@if (_tasks.Count == 0)
+{
+    <div class="empty-state">No tasks match the current filters.</div>
+}
+else
+{
+    <MudStack Spacing="2">
+        @foreach (var task in _tasks)
+        {
+            <MudPaper Elevation="0" Class="task-row pa-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center">
+                    <MudIconButton Icon="@Icons.Material.Outlined.RadioButtonUnchecked" Color="Color.Primary" aria-label="Complete task" OnClick="@(() => Complete(task.Id))" />
+                    <div style="flex:1;min-width:0;overflow-wrap:break-word">
+                        <MudText Typo="Typo.subtitle1" Style="white-space:normal;word-break:break-word">@task.Title</MudText>
+                        <MudText Typo="Typo.caption" Class="task-id" Style="white-space:normal;word-break:break-all">ID: @task.Id</MudText>
+                        <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@(task.Project ?? "No project")</MudText>
+                            @if (task.Priority != TaskPriority.None)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning">@task.Priority</MudChip>
+                            }
+                        </MudStack>
+                    </div>
+                    @if (task.DueDate is not null)
+                    {
+                        <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Outlined.Event">@task.DueDate.Value.ToString("d")@(task.DueTime is null ? string.Empty : $" {task.DueTime.Value:t}")</MudChip>
+                    }
+                    <MudIconButton Icon="@Icons.Material.Outlined.Edit" aria-label="Edit task" OnClick="@(() => _editingId = task.Id)" />
+                </MudStack>
+            </MudPaper>
+        }
+    </MudStack>
+}
+
+@if (_editingId is { } editingId)
+{
+    <TaskEditor TaskId="editingId" OnClosed="EditorClosed" />
+}
+
+@code {
+    private IReadOnlyList<TaskSummary> _tasks = [];
+    private IReadOnlyList<ProjectSummary> _projects = [];
+    private Guid? _editingId;
+    private Guid? _selectedProjectId;
+    private DateTime? _dueDateFilter;
+    private string? _captureProjectName;
+    private string _captureTitle = string.Empty;
+    private string _nameFilter = string.Empty;
+    private string _idFilter = string.Empty;
+    private string? _extraFilter = null;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        _projects = await ProjectsService.ListAsync();
+        await ApplyFilters();
+    }
+
+    private async Task CaptureTask()
+    {
+        if (string.IsNullOrWhiteSpace(_captureTitle)) return;
+        try
+        {
+            Guid? projectId = null;
+            if (!string.IsNullOrWhiteSpace(_captureProjectName))
+            {
+                var projectName = _captureProjectName.Trim();
+                var existing = _projects.FirstOrDefault(project => string.Equals(project.Name, projectName, StringComparison.OrdinalIgnoreCase));
+                projectId = existing?.Id ?? await ProjectsService.CreateAsync(projectName, "#03A7E1");
+            }
+            await TasksService.CreateAsync(_captureTitle, projectId);
+            _captureTitle = string.Empty;
+            _captureProjectName = null;
+            await Load();
+            Snackbar.Add("Task added.", Severity.Success);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+    }
+
+    private Task<IEnumerable<string>> SearchProjects(string? value, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var matches = _projects.Select(project => project.Name)
+            .Where(name => string.IsNullOrWhiteSpace(value) || name.Contains(value, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(matches);
+    }
+
+    private async Task HandleCaptureKey(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter") await CaptureTask();
+    }
+
+    private async Task ProjectChanged(Guid? projectId)
+    {
+        _selectedProjectId = projectId;
+        await ApplyFilters();
+    }
+
+    private async Task ApplyFilters()
+    {
+        var dueDate = _dueDateFilter.HasValue ? DateOnly.FromDateTime(_dueDateFilter.Value) : (DateOnly?)null;
+        _tasks = await TasksService.SearchAsync(new TaskFilter(
+            Name: string.IsNullOrWhiteSpace(_nameFilter) ? null : _nameFilter,
+            Id: string.IsNullOrWhiteSpace(_idFilter) ? null : _idFilter,
+            ProjectId: _selectedProjectId,
+            DueDate: dueDate,
+            HighPriority: _extraFilter is "high" or "high-soon",
+            DueSoon: _extraFilter is "soon" or "high-soon"));
+    }
+
+    private async Task ClearFilters()
+    {
+        _nameFilter = string.Empty;
+        _idFilter = string.Empty;
+        _dueDateFilter = null;
+        _selectedProjectId = null;
+        _extraFilter = null;
+        await ApplyFilters();
+    }
+
+    private async Task RenameProject(Guid id, string currentName)
+    {
+        var name = await JS.InvokeAsync<string?>("prompt", "Project name", currentName);
+        if (string.IsNullOrWhiteSpace(name) || string.Equals(name.Trim(), currentName, StringComparison.Ordinal)) return;
+        try
+        {
+            await ProjectsService.RenameAsync(id, name);
+            await Load();
+            Snackbar.Add("Project renamed.", Severity.Success);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+    }
+
+    private async Task ArchiveProject(Guid id, string name)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Archive project '{name}'? Its tasks will remain available.")) return;
+        await ProjectsService.SetArchivedAsync(id, true);
+        if (_selectedProjectId == id) _selectedProjectId = null;
+        await Load();
+    }
+
+    private async Task Complete(Guid id)
+    {
+        await TasksService.SetStateAsync(id, TaskState.Completed);
+        await Load();
+    }
+
+    private async Task EditorClosed()
+    {
+        _editingId = null;
+        await Load();
+    }
+}

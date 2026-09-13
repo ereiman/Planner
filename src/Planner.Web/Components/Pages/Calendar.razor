@@ -1,0 +1,107 @@
+@page "/calendar"
+@implements IAsyncDisposable
+@inject ITaskService TasksService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>Calendar · Planner</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <MudText Typo="Typo.h3">Calendar</MudText>
+    </div>
+</div>
+
+<MudPaper Elevation="0" Class="pa-4 calendar-surface">
+    <div @ref="_calendarElement"></div>
+</MudPaper>
+@if (_editingId is { } editingId) { <TaskEditor TaskId="editingId" OnClosed="EditorClosed" /> }
+
+@code {
+    private ElementReference _calendarElement;
+    private IJSObjectReference? _calendar;
+    private DotNetObjectReference<Calendar>? _dotNet;
+    private IReadOnlyList<TaskSummary> _tasks = [];
+    private Guid? _editingId;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _dotNet = DotNetObjectReference.Create(this);
+        _calendar = await JS.InvokeAsync<IJSObjectReference>("plannerCalendar.create", _calendarElement, _dotNet, new
+        {
+            initialView = "dayGridMonth",
+            selectable = true,
+            editable = false,
+            events = CalendarEvents(),
+            externalEvents = Array.Empty<object>()
+        });
+        await _calendar.InvokeVoidAsync("update", CalendarEvents(), Array.Empty<object>());
+    }
+
+    [JSInvokable]
+    public async Task OnCalendarRange(string startsAt, string endsAt)
+    {
+        var start = DateOnly.FromDateTime(DateTimeOffset.Parse(startsAt).LocalDateTime);
+        var end = DateOnly.FromDateTime(DateTimeOffset.Parse(endsAt).LocalDateTime);
+        _tasks = await TasksService.ListDueAsync(start, end);
+        if (_calendar is not null)
+            await _calendar.InvokeVoidAsync("update", CalendarEvents(), Array.Empty<object>());
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task OnCalendarSelect(string startsAt, string endsAt)
+    {
+        Snackbar.Add("Set or change due dates from the Tasks page.", Severity.Info);
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public async Task OnCalendarEventClick(string? timeBlockId, string? taskId)
+    {
+        if (Guid.TryParse(taskId, out var id))
+        {
+            var task = _tasks.FirstOrDefault(x => x.Id == id);
+            if (task is not null) _editingId = task.Id;
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task<bool> OnCalendarEventChange(string timeBlockId, string startsAt, string endsAt) => Task.FromResult(false);
+
+    private async Task EditorClosed()
+    {
+        _editingId = null;
+        if (_calendar is not null) await _calendar.InvokeVoidAsync("update", CalendarEvents(), Array.Empty<object>());
+    }
+
+    private object[] CalendarEvents() => _tasks.Where(x => x.DueDate is not null).Select(task =>
+    {
+        var start = task.DueTime is null
+            ? task.DueDate!.Value.ToString("yyyy-MM-dd")
+            : $"{task.DueDate:yyyy-MM-dd}T{task.DueTime:HH:mm:ss}";
+        return (object)new
+        {
+            id = $"due-{task.Id}",
+            title = task.Title,
+            start,
+            allDay = task.DueTime is null,
+            editable = false,
+            color = task.State == TaskState.Completed ? "#2e7d32" : "rgb(3, 167, 225)",
+            extendedProps = new { taskId = task.Id, timeBlockId = (Guid?)null, locked = true }
+        };
+    }).ToArray();
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_calendar is not null)
+        {
+            try { await _calendar.InvokeVoidAsync("dispose"); }
+            catch (JSDisconnectedException) { }
+            await _calendar.DisposeAsync();
+        }
+        _dotNet?.Dispose();
+    }
+}

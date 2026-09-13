@@ -1,0 +1,129 @@
+@page "/settings"
+@inject IMicrosoftAccountService MicrosoftAccounts
+@inject IOutlookSyncService OutlookSync
+@inject ISnackbar Snackbar
+@inject IBackupService Backups
+@inject ISystemFolderService Folders
+@inject IJSRuntime JS
+
+<PageTitle>Settings · Planner</PageTitle>
+<div class="page-heading">
+    <div>
+        <MudText Typo="Typo.h3">Settings</MudText>
+    </div>
+</div>
+<MudPaper Elevation="0" Class="pa-5 mb-4" Style="border:1px solid #e7e0ec">
+    <MudText Typo="Typo.h6">Local-first storage</MudText>
+    <MudText Color="Color.Secondary">Planner data is stored in SQLite under <code>%LOCALAPPDATA%\Planner\Data</code>. Microsoft access tokens are never stored in SQLite or backups; MSAL keeps them separately under <code>%LOCALAPPDATA%\Planner\Auth</code>.</MudText>
+    <MudStack Row="true" Class="mt-3"><MudButton Variant="Variant.Filled" OnClick="CreateBackup">Back up now</MudButton><MudButton OnClick="@(() => Folders.Open(Backups.DataFolder))">Open data folder</MudButton><MudButton OnClick="@(() => Folders.Open(Backups.BackupFolder))">Open backup folder</MudButton></MudStack>
+</MudPaper>
+<MudPaper Elevation="0" Class="pa-5" Style="border:1px solid #e7e0ec">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+        <div>
+            <MudText Typo="Typo.h6">Microsoft Outlook</MudText>
+            <MudText Color="Color.Secondary">Read-only calendar availability for organizational and personal Microsoft accounts.</MudText>
+        </div>
+        @if (MicrosoftAccounts.IsConfigured)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="Connect">Connect account</MudButton>
+        }
+    </MudStack>
+    @if (!MicrosoftAccounts.IsConfigured)
+    {
+        <MudAlert Severity="Severity.Info" Class="mt-4">
+            Outlook is not configured. Register a public-client application, then set <code>Planner:Microsoft:ClientId</code>. Planner continues to work normally without it.
+        </MudAlert>
+    }
+    else if (_accounts.Count == 0)
+    {
+        <div class="empty-state mt-4">No Microsoft accounts connected. Sign-in only opens when you choose Connect account.</div>
+    }
+    else
+    {
+        <MudTable Items="_accounts" Hover="true" Elevation="0" Class="mt-4">
+            <HeaderContent><MudTh>Account</MudTh><MudTh>Connection</MudTh><MudTh>Calendars</MudTh><MudTh>Last sync</MudTh><MudTh>Error</MudTh><MudTh></MudTh></HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Account"><strong>@context.DisplayName</strong><br /><small>@context.EmailAddress</small></MudTd>
+                <MudTd DataLabel="Connection"><MudChip T="string" Size="Size.Small" Color="@(context.ConnectionStatus == MicrosoftAccountConnectionStatus.Connected ? Color.Success : Color.Warning)">@context.ConnectionStatus</MudChip></MudTd>
+                <MudTd DataLabel="Calendars">
+                    @if (context.Calendars.Count == 0)
+                    {
+                        <span>—</span>
+                    }
+                    else
+                    {
+                        <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                            @foreach (var calendar in context.Calendars)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="@(calendar.SyncStatus == CalendarSyncStatus.Current ? Color.Success : Color.Warning)" title="@(string.IsNullOrWhiteSpace(calendar.LastError) ? string.Empty : calendar.LastError)">@calendar.Name</MudChip>
+                            }
+                        </MudStack>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Last sync">@(context.LastSuccessfulSyncAtUtc?.ToLocalTime().ToString("g") ?? "Never")<br /><small>@context.SyncStatus</small></MudTd>
+                <MudTd DataLabel="Error">@(string.IsNullOrWhiteSpace(context.LastError) ? "—" : DiagnosticSanitizer.Sanitize(context.LastError))</MudTd>
+                <MudTd>
+                    <MudButton Size="Size.Small" Disabled="_busy" OnClick="@(() => Refresh(context.Id))">Refresh</MudButton>
+                    @if (context.ConnectionStatus == MicrosoftAccountConnectionStatus.ReconnectRequired)
+                    {
+                        <MudButton Size="Size.Small" Color="Color.Warning" Disabled="_busy" OnClick="@(() => Reconnect(context.Id))">Reconnect</MudButton>
+                    }
+                    <MudButton Size="Size.Small" Color="Color.Error" Disabled="_busy" OnClick="@(() => Disconnect(context.Id))">Disconnect</MudButton>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudPaper>
+
+@code {
+    private IReadOnlyList<MicrosoftAccountSummary> _accounts = [];
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load() => _accounts = await MicrosoftAccounts.ListAsync();
+
+    private async Task Connect() => await Run(async () =>
+    {
+        var id = await MicrosoftAccounts.ConnectAsync();
+        await OutlookSync.SyncAccountAsync(id);
+        Snackbar.Add("Microsoft account connected.", Severity.Success);
+    });
+
+    private async Task Reconnect(Guid id) => await Run(async () =>
+    {
+        await MicrosoftAccounts.ReconnectAsync(id);
+        await OutlookSync.SyncAccountAsync(id);
+        Snackbar.Add("Microsoft account reconnected.", Severity.Success);
+    });
+
+    private async Task Refresh(Guid id) => await Run(async () =>
+    {
+        await OutlookSync.SyncAccountAsync(id);
+        Snackbar.Add("Calendar refreshed.", Severity.Success);
+    });
+
+    private async Task Disconnect(Guid id)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", "Disconnect this Microsoft account? Imported calendar data for it will be removed.")) return;
+        await Run(async () =>
+        {
+            await MicrosoftAccounts.DisconnectAsync(id);
+            Snackbar.Add("Microsoft account disconnected.", Severity.Success);
+        });
+    }
+
+    private async Task CreateBackup() => await Run(async () =>
+    {
+        var path = await Backups.CreateAsync();
+        Snackbar.Add($"Backup created: {Path.GetFileName(path)}", Severity.Success);
+    });
+
+    private async Task Run(Func<Task> action)
+    {
+        _busy = true;
+        try { await action(); }
+        catch (Exception exception) { Snackbar.Add(exception.Message, Severity.Error); }
+        finally { await Load(); _busy = false; }
+    }
+}

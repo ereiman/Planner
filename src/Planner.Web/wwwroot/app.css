@@ -1,0 +1,44 @@
+html, body { margin: 0; min-height: 100%; font-family: "Segoe UI", sans-serif; background: #f7f5fa; color: #1d1b20; }
+h1:focus { outline: none; }
+.planner-appbar { border-bottom: 1px solid #e7e0ec; }
+.planner-brand { font-weight: 700; letter-spacing: -.04em; }
+.planner-drawer { border-right: 1px solid #e7e0ec; }
+.planner-content { padding: 32px 36px 60px; max-width: 1680px; margin: 0 auto; }
+.page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.page-heading :is(h1, h2, h3, h4, h5, h6), .fc .fc-toolbar-title { color: #3c4043; font-weight: 650; }
+.fc .fc-button-primary { color: #ffffff; }
+.page-kicker { color: rgb(3, 167, 225); font-weight: 700; text-transform: uppercase; font-size: .75rem; letter-spacing: .08em; }
+.task-row { border: 1px solid #e7e0ec; transition: border-color .15s, transform .15s; }
+.task-row:hover { border-color: #c9b9e8; transform: translateY(-1px); }
+.kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(290px, 1fr); gap: 18px; overflow-x: auto; padding-bottom: 18px; }
+.kanban-column { background: #f1edf5; border: 1px solid #e3dce8; border-radius: 18px; padding: 14px; min-height: 480px; }
+.kanban-card { background: #fffbfe; border: 1px solid #e7e0ec; border-radius: 14px; padding: 14px; margin-top: 12px; box-shadow: 0 2px 8px rgba(50, 35, 70, .05); }
+.empty-state { padding: 56px 24px; text-align: center; border: 1px dashed #cac4d0; border-radius: 18px; color: #79747e; }
+.task-editor-backdrop { position: fixed; inset: 0; z-index: 1400; background: rgba(29,27,32,.45); display: grid; place-items: center; padding: 24px; }
+.task-editor { width: min(760px, 100%); max-height: 90vh; overflow: auto; }
+.calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+.calendar-surface, .schedule-editor, .schedule-list { border: 1px solid #e7e0ec; }
+.schedule-editor { position: sticky; top: 84px; }
+.schedule-field { display: grid; gap: 6px; margin-top: 14px; color: #49454f; font-size: .8rem; font-weight: 600; }
+.schedule-field input { box-sizing: border-box; width: 100%; border: 1px solid #79747e; border-radius: 4px; background: transparent; color: inherit; font: inherit; font-size: 1rem; padding: 14px 12px; }
+.fc { --fc-border-color: #e7e0ec; --fc-button-bg-color: rgb(3, 167, 225); --fc-button-border-color: rgb(3, 167, 225); --fc-button-hover-bg-color: #0288b9; --fc-button-active-bg-color: #01739d; }
+.quick-capture .mud-input-control, .task-filters .mud-input-control, .board-actions .mud-input-control { margin: 0; }
+.board-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .9rem; }
+.board-actions .mud-button-root { white-space: nowrap; }
+.board-actions .mud-checkbox { flex: none; }
+.board-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: .9rem; }
+.board-controls .mud-input-control { margin: 0; width: 180px; }
+.board-controls .mud-select:first-of-type { width: 260px; }
+.board-controls .mud-button-root { white-space: nowrap; }
+.task-filters .extra-filter-column { max-width: 13%; }
+.task-filters .filter-actions { align-items: center; height: 100%; margin-left: 0; }
+.quick-capture .mud-button-root, .task-filters .mud-button-root { min-height: 40px; }
+.quick-capture .add-task-button { white-space: nowrap; }
+.fc .fc-toolbar-title { font-size: 1.25rem; }
+.fc-event { cursor: pointer; }
+.fc-event-title { white-space: normal !important; word-break: break-word; }
+.fc-event-time, .fc-event-main-frame { overflow: visible; }
+#blazor-error-ui { color-scheme: light only; background: #fff4ce; bottom: 0; box-shadow: 0 -1px 2px rgba(0,0,0,.2); display: none; left: 0; padding: .7rem 1.25rem; position: fixed; width: 100%; z-index: 1000; }
+#blazor-error-ui .dismiss { cursor: pointer; position: absolute; right: .75rem; }
+@media (max-width: 900px) { .calendar-layout { grid-template-columns: 1fr; } .schedule-editor { position: static; } }
+@media (max-width: 700px) { .planner-content { padding: 20px 16px; } .page-heading { align-items: flex-start; flex-direction: column; } .fc .fc-toolbar { align-items: flex-start; flex-direction: column; gap: 10px; } }

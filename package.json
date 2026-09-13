@@ -1,0 +1,16 @@
+{
+  "name": "planner",
+  "version": "1.0.0",
+  "description": "Client assets for the Planner Blazor application",
+  "private": true,
+  "scripts": {
+    "assets": "node scripts/copy-assets.mjs",
+    "postinstall": "npm run assets"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "fullcalendar": "7.0.2",
+    "sortablejs": "1.15.7"
+  }
+}

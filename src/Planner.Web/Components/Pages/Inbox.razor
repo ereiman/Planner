@@ -1,0 +1,8 @@
+@page "/inbox"
+@inject NavigationManager Navigation
+
+<PageTitle>Tasks · Planner</PageTitle>
+
+@code {
+    protected override void OnInitialized() => Navigation.NavigateTo("/tasks", replace: true);
+}

@@ -1,0 +1,54 @@
+﻿@inherits LayoutComponentBase
+
+<MudThemeProvider Theme="_theme" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+<MudLayout>
+    <MudAppBar Elevation="0" Class="planner-appbar">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" OnClick="ToggleDrawer" />
+        <MudText Typo="Typo.h5" Class="planner-brand">Planner</MudText>
+        <MudSpacer />
+    </MudAppBar>
+    <MudDrawer @bind-Open="_drawerOpen" Variant="DrawerVariant.Responsive" Elevation="0" Class="planner-drawer">
+        <MudNavMenu Class="px-3 py-4">
+            <MudNavLink Href="/tasks" Match="NavLinkMatch.All" Icon="@Icons.Material.Outlined.CheckCircleOutline">Tasks</MudNavLink>
+            <MudNavLink Href="/boards" Icon="@Icons.Material.Outlined.ViewKanban">Boards</MudNavLink>
+            <MudNavLink Href="/schedule" Icon="@Icons.Material.Outlined.DateRange">Schedule</MudNavLink>
+            <MudNavLink Href="/calendar" Icon="@Icons.Material.Outlined.CalendarMonth">Calendar</MudNavLink>
+            <MudDivider Class="my-3" />
+            <MudNavLink Href="/archive" Icon="@Icons.Material.Outlined.Archive">Archive</MudNavLink>
+            <MudNavLink Href="/settings" Icon="@Icons.Material.Outlined.Settings">Settings</MudNavLink>
+        </MudNavMenu>
+    </MudDrawer>
+    <MudMainContent>
+        <main class="planner-content">@Body</main>
+    </MudMainContent>
+</MudLayout>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">×</span>
+</div>
+
+@code {
+    private bool _drawerOpen = true;
+    private readonly MudTheme _theme = new()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "rgb(3, 167, 225)",
+            Secondary = "#000000",
+            Background = "#F7F5FA",
+            Surface = "#FFFBFE",
+            AppbarBackground = "#FFFBFE",
+            AppbarText = "#1D1B20",
+            DrawerBackground = "#F7F2FA",
+            DrawerText = "#49454F"
+        },
+        LayoutProperties = new LayoutProperties { DefaultBorderRadius = "14px" }
+    };
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+}
